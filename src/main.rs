@@ -17,6 +17,7 @@ const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '�
 const REDRAW_EVERY: Duration = Duration::from_millis(80);
 
 #[derive(Parser)]
+#[command(version)]
 struct Cli {
     /// The path to analyze. Defaults to the current directory.
     #[arg(default_value = ".")]
