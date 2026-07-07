@@ -22,6 +22,9 @@ disk — biggest folders first, every step of the way.
 - **Interactive navigation.** Built on [`ratatui`](https://ratatui.rs). Every directory
   lists its children largest-first, each with a proportional size bar. Descend, step
   back up, and the folder you came from stays highlighted.
+- **Delete from the TUI.** Hit `Ctrl` + `D` to remove the selected file or folder
+  (recursively) right where you spotted it, behind a confirmation prompt — the size
+  totals update instantly, no rescan needed.
 - **Single static binary.** No runtime, no interpreter — just `cargo build --release`.
 
 ## Installation
@@ -66,7 +69,12 @@ ignored and hidden files included — so the totals reflect real disk usage.
 | `→` / `l` / `Enter`     | Enter the selected directory            |
 | `←` / `h` / `Backspace` | Go back to the parent directory         |
 | `Home` / `End`          | Jump to the first / last entry          |
+| `Ctrl` + `D`            | Delete the selected entry (asks first)  |
 | `q` / `Esc`             | Quit (asks for confirmation)            |
+
+> **Warning:** `Ctrl` + `D` deletes permanently — files and folders are removed
+> from disk (not moved to Trash), and directories are deleted recursively. There is
+> a confirmation prompt, but no undo.
 
 ## Development
 

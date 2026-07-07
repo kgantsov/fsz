@@ -1,7 +1,7 @@
 use crate::tree::Tree;
 use human_bytes::human_bytes;
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -15,7 +15,7 @@ const BAR_WIDTH: usize = 16;
 /// into the arena (`current` directory + the selected row); the tree itself is
 /// immutable, so navigation is just swapping indices and re-sorting children.
 pub struct App<'a> {
-    tree: &'a Tree,
+    tree: &'a mut Tree,
     /// Index of the directory currently being listed.
     current: usize,
     /// `current`'s children, largest first — cached so we sort once per move.
@@ -25,17 +25,25 @@ pub struct App<'a> {
     /// accidental `q`/`Esc` can't drop you out of the app without a second,
     /// deliberate confirmation.
     confirm_quit: bool,
+    /// When true, a "delete this?" popup is up and captures all input. Set from
+    /// `Ctrl+D`; only an explicit yes actually removes anything from disk.
+    confirm_delete: bool,
+    /// Last delete error, shown in the footer until the next action clears it.
+    error: Option<String>,
     quit: bool,
 }
 
 impl<'a> App<'a> {
-    pub fn new(tree: &'a Tree) -> Self {
+    pub fn new(tree: &'a mut Tree) -> Self {
+        let root = tree.root_idx;
         let mut app = App {
             tree,
-            current: tree.root_idx,
+            current: root,
             children: Vec::new(),
             state: ListState::default(),
             confirm_quit: false,
+            confirm_delete: false,
+            error: None,
             quit: false,
         };
         app.rebuild(None);
@@ -78,19 +86,40 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Delete the highlighted entry from disk and refresh the list, keeping the
+    /// cursor near where it was. On failure the tree is untouched and the error
+    /// is stashed for the footer.
+    fn delete_selected(&mut self) {
+        let Some(child) = self.selected_child() else {
+            return;
+        };
+        let row = self.state.selected().unwrap_or(0);
+        match self.tree.delete(child) {
+            Ok(()) => {
+                self.error = None;
+                self.children = self.tree.children_by_size(self.current);
+                self.state.select(match self.children.len() {
+                    0 => None,
+                    len => Some(row.min(len - 1)),
+                });
+            }
+            Err(e) => self.error = Some(format!("Delete failed: {e}")),
+        }
+    }
+
     pub fn run(mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         while !self.quit {
             terminal.draw(|frame| self.draw(frame))?;
             if let Event::Key(key) = event::read()?
                 && key.kind == KeyEventKind::Press
             {
-                self.on_key(key.code);
+                self.on_key(key.code, key.modifiers);
             }
         }
         Ok(())
     }
 
-    fn on_key(&mut self, code: KeyCode) {
+    fn on_key(&mut self, code: KeyCode, mods: KeyModifiers) {
         // While the quit popup is up it owns the keyboard: only an explicit
         // yes commits, and any other key backs out. That way the same `q`/`Esc`
         // that opened it can't also confirm it by accident.
@@ -98,6 +127,26 @@ impl<'a> App<'a> {
             match code {
                 KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => self.quit = true,
                 _ => self.confirm_quit = false,
+            }
+            return;
+        }
+
+        // Same deal for the delete popup: only a deliberate yes removes the
+        // highlighted entry from disk; anything else cancels.
+        if self.confirm_delete {
+            self.confirm_delete = false;
+            if let KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter = code {
+                self.delete_selected();
+            }
+            return;
+        }
+
+        // Ctrl+D arms the delete confirmation, but only when a row is selected.
+        if let KeyCode::Char('d') = code
+            && mods.contains(KeyModifiers::CONTROL)
+        {
+            if self.selected_child().is_some() {
+                self.confirm_delete = true;
             }
             return;
         }
@@ -166,21 +215,68 @@ impl<'a> App<'a> {
             .highlight_symbol("▶ ");
         frame.render_stateful_widget(list, body, &mut self.state);
 
-        // Footer: key hints.
-        let hint = if self.children.is_empty() {
-            " (empty)   ↑/↓ move · → enter · ← back · q quit "
+        // Footer: the last delete error if there is one, otherwise key hints.
+        let footer_widget = if let Some(err) = &self.error {
+            Paragraph::new(format!(" {err} ")).style(Style::default().fg(Color::Red))
         } else {
-            " ↑/↓ move · →/⏎ enter · ←/⌫ back · q quit "
+            let hint = if self.children.is_empty() {
+                " (empty)   ↑/↓ move · → enter · ← back · q quit "
+            } else {
+                " ↑/↓ move · →/⏎ enter · ←/⌫ back · ^D delete · q quit "
+            };
+            Paragraph::new(hint).style(Style::default().fg(Color::DarkGray))
         };
-        frame.render_widget(
-            Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
-            footer,
-        );
+        frame.render_widget(footer_widget, footer);
 
-        // Quit confirmation, drawn last so it sits on top of everything.
+        // Confirmations, drawn last so they sit on top of everything.
         if self.confirm_quit {
             self.draw_quit_popup(frame);
         }
+        if self.confirm_delete {
+            self.draw_delete_popup(frame);
+        }
+    }
+
+    /// A centered "delete?" dialog naming the highlighted entry.
+    fn draw_delete_popup(&self, frame: &mut ratatui::Frame) {
+        let name = self
+            .selected_child()
+            .map(|c| self.tree.nodes[c].name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        let area = centered_rect(frame.area(), 44, 6);
+        frame.render_widget(Clear, area);
+
+        let body = Paragraph::new(vec![
+            Line::from("Delete permanently?").centered(),
+            Line::from(Span::styled(
+                name,
+                Style::default().add_modifier(Modifier::BOLD),
+            ))
+            .centered(),
+            Line::from(vec![
+                Span::styled(
+                    "Y",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("es    "),
+                Span::styled(
+                    "N",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("o"),
+            ])
+            .centered(),
+        ])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Confirm delete ")
+                .border_style(Style::default().fg(Color::Red)),
+        );
+        frame.render_widget(body, area);
     }
 
     /// A small centered "really quit?" dialog over the current view.

@@ -1,6 +1,7 @@
 use ignore::{WalkBuilder, WalkState};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
+use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -181,6 +182,34 @@ impl Tree {
         let mut children = self.nodes[idx].children.clone();
         children.sort_by(|&a, &b| self.nodes[b].total_size.cmp(&self.nodes[a].total_size));
         children
+    }
+
+    /// Remove `idx` from disk and detach it from the tree. Directories go via
+    /// `remove_dir_all` (contents and all), everything else via `remove_file`;
+    /// `symlink_metadata` keeps us from following a symlinked directory and
+    /// deleting its target's contents. On success the node is unlinked from its
+    /// parent and its `total_size` is subtracted from every ancestor, so the
+    /// bars and header stay correct without a rescan. The node itself stays in
+    /// the arena, just unreferenced — indices elsewhere remain valid.
+    pub fn delete(&mut self, idx: usize) -> io::Result<()> {
+        let path = self.path_of(idx);
+        let meta = std::fs::symlink_metadata(&path)?;
+        if meta.is_dir() {
+            std::fs::remove_dir_all(&path)?;
+        } else {
+            std::fs::remove_file(&path)?;
+        }
+
+        let freed = self.nodes[idx].total_size;
+        if let Some(parent) = self.nodes[idx].parent {
+            self.nodes[parent].children.retain(|&c| c != idx);
+            let mut cur = Some(parent);
+            while let Some(i) = cur {
+                self.nodes[i].total_size = self.nodes[i].total_size.saturating_sub(freed);
+                cur = self.nodes[i].parent;
+            }
+        }
+        Ok(())
     }
 
     /// Reconstruct a node's full path by walking `parent` links back to the

@@ -32,7 +32,7 @@ fn main() -> io::Result<()> {
     // REDRAW_EVERY; `frame` advances the spinner only when we actually repaint.
     let mut last = Instant::now() - REDRAW_EVERY;
     let mut frame = 0usize;
-    let tree = Tree::build(&args.path, |p| {
+    let mut tree = Tree::build(&args.path, |p| {
         if last.elapsed() < REDRAW_EVERY {
             return;
         }
@@ -51,7 +51,7 @@ fn main() -> io::Result<()> {
     let _ = io::stderr().flush();
 
     let mut terminal = ratatui::init();
-    let result = App::new(&tree).run(&mut terminal);
+    let result = App::new(&mut tree).run(&mut terminal);
     ratatui::restore();
     result
 }
