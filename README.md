@@ -29,7 +29,29 @@ disk — biggest folders first, every step of the way.
 
 ## Installation
 
-Requires a Rust toolchain (edition 2024).
+### Install script (macOS)
+
+The quickest way to get `fsz` is the install script, which downloads the latest
+prebuilt binary for your architecture (Apple Silicon or Intel) and installs it to
+`/usr/local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kgantsov/fsz/main/install.sh | bash
+```
+
+Or download and run it manually if you'd rather inspect it first:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/kgantsov/fsz/main/install.sh
+bash install.sh
+```
+
+The script may prompt for `sudo` to write to `/usr/local/bin`. Once it finishes,
+run `fsz --help` to verify.
+
+### Build from source
+
+Requires a Rust toolchain (edition 2024). Works on any supported Unix-like system.
 
 ```bash
 git clone <repo-url> fsz
