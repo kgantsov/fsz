@@ -77,6 +77,14 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Flip apparent ↔ allocated. Totals change, so re-sort the current list —
+    /// but keep the same entry highlighted rather than snapping back to the top.
+    fn toggle_size_mode(&mut self) {
+        let keep = self.selected_child();
+        self.tree.toggle_mode();
+        self.rebuild(keep);
+    }
+
     /// Step up to the parent directory, re-selecting the folder we left.
     fn go_up(&mut self) {
         if let Some(parent) = self.tree.nodes[self.current].parent {
@@ -159,6 +167,7 @@ impl<'a> App<'a> {
             KeyCode::Left | KeyCode::Char('h') | KeyCode::Backspace => self.go_up(),
             KeyCode::Home => self.state.select_first(),
             KeyCode::End => self.state.select_last(),
+            KeyCode::Char('a') => self.toggle_size_mode(),
             _ => {}
         }
     }
@@ -185,6 +194,11 @@ impl<'a> App<'a> {
             Span::styled(
                 human_bytes(node.total_size as f64),
                 Style::default().fg(Color::Cyan),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                format!("({})", self.tree.mode().label()),
+                Style::default().fg(Color::DarkGray),
             ),
         ]);
         frame.render_widget(
@@ -220,9 +234,9 @@ impl<'a> App<'a> {
             Paragraph::new(format!(" {err} ")).style(Style::default().fg(Color::Red))
         } else {
             let hint = if self.children.is_empty() {
-                " (empty)   ↑/↓ move · → enter · ← back · q quit "
+                " (empty)   ↑/↓ move · → enter · ← back · a size · q quit "
             } else {
-                " ↑/↓ move · →/⏎ enter · ←/⌫ back · ^D delete · q quit "
+                " ↑/↓ move · →/⏎ enter · ←/⌫ back · a size · ^D delete · q quit "
             };
             Paragraph::new(hint).style(Style::default().fg(Color::DarkGray))
         };

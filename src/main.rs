@@ -6,7 +6,7 @@ use human_bytes::human_bytes;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use tree::Tree;
+use tree::{SizeMode, Tree};
 use ui::App;
 
 /// Braille spinner frames, cycled while the scan runs.
@@ -22,6 +22,11 @@ struct Cli {
     /// The path to analyze. Defaults to the current directory.
     #[arg(default_value = ".")]
     path: PathBuf,
+
+    /// Size to total up: `allocated` (on-disk blocks) or `apparent` (logical
+    /// bytes). Toggle interactively with `a` once the TUI is up.
+    #[arg(long, value_enum, default_value = "allocated")]
+    size: SizeMode,
 }
 
 fn main() -> io::Result<()> {
@@ -32,7 +37,7 @@ fn main() -> io::Result<()> {
     // REDRAW_EVERY; `frame` advances the spinner only when we actually repaint.
     let mut last = Instant::now() - REDRAW_EVERY;
     let mut frame = 0usize;
-    let mut tree = Tree::build(&args.path, |p| {
+    let mut tree = Tree::build(&args.path, args.size, |p| {
         if last.elapsed() < REDRAW_EVERY {
             return;
         }

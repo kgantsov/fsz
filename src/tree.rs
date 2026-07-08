@@ -6,6 +6,37 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
+/// Which notion of "size" the tree totals up. Both are captured per file
+/// during the scan, so switching between them afterward is a cheap in-memory
+/// recompute — no rescan (see [`Tree::toggle_mode`]).
+#[derive(Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum SizeMode {
+    /// Logical size (`st_size` / `len()`): the bytes the file *contains*.
+    Apparent,
+    /// On-disk footprint (`st_blocks` × 512): the blocks actually allocated,
+    /// which for many small files rounds up well past the apparent size.
+    #[default]
+    Allocated,
+}
+
+impl SizeMode {
+    /// Lower-case name shown in the header and used as the CLI value.
+    pub fn label(self) -> &'static str {
+        match self {
+            SizeMode::Apparent => "apparent",
+            SizeMode::Allocated => "allocated",
+        }
+    }
+
+    /// The other mode — used to flip on the interactive toggle.
+    fn toggled(self) -> SizeMode {
+        match self {
+            SizeMode::Apparent => SizeMode::Allocated,
+            SizeMode::Allocated => SizeMode::Apparent,
+        }
+    }
+}
+
 /// A running snapshot of scan progress, handed to `Tree::build`'s callback.
 /// `Copy` so it can be passed by value cheaply on every entry.
 #[derive(Clone, Copy, Default)]
@@ -24,10 +55,13 @@ pub struct Progress {
 /// path by walking `parent` links when you actually need it.
 pub struct Node {
     pub name: OsString,
-    /// This entry's own bytes: a file's allocated on-disk size (`st_blocks`
-    /// × 512), or 0 for a directory.
-    pub own_size: u64,
-    /// `own_size` plus every descendant's `own_size`. Filled in post-order.
+    /// This entry's own apparent bytes (`st_size`), or 0 for a directory.
+    pub own_apparent: u64,
+    /// This entry's own allocated bytes (`st_blocks` × 512), or 0 for a
+    /// directory. Both are stored so the mode can flip without a rescan.
+    pub own_allocated: u64,
+    /// The current mode's own size plus every descendant's, for the active
+    /// [`SizeMode`]. Filled in post-order and recomputed on a mode change.
     pub total_size: u64,
     pub children: Vec<usize>,
     /// `None` only for the root. The TUI navigates "up" through it.
@@ -40,6 +74,14 @@ impl Node {
     pub fn is_dir(&self) -> bool {
         !self.children.is_empty()
     }
+
+    /// This node's own size under `mode`.
+    fn own_size(&self, mode: SizeMode) -> u64 {
+        match mode {
+            SizeMode::Apparent => self.own_apparent,
+            SizeMode::Allocated => self.own_allocated,
+        }
+    }
 }
 
 /// Arena-backed tree: all nodes live in one `Vec`, addressed by `usize`.
@@ -50,6 +92,8 @@ pub struct Tree {
     index: HashMap<PathBuf, usize>,
     root: PathBuf,
     pub root_idx: usize,
+    /// Which size the totals currently reflect. Flip with [`Tree::toggle_mode`].
+    mode: SizeMode,
 }
 
 impl Tree {
@@ -57,12 +101,13 @@ impl Tree {
     /// walk. `on_progress` receives a running [`Progress`] snapshot; it fires
     /// once per entry (potentially millions of times), so a caller that draws
     /// to the screen must throttle itself.
-    pub fn build(root: &Path, mut on_progress: impl FnMut(Progress)) -> Self {
+    pub fn build(root: &Path, mode: SizeMode, mut on_progress: impl FnMut(Progress)) -> Self {
         let mut tree = Tree {
             nodes: Vec::new(),
             index: HashMap::new(),
             root: root.to_path_buf(),
             root_idx: 0,
+            mode,
         };
 
         // Ensure the root node exists even if the path is empty/unreadable.
@@ -76,7 +121,7 @@ impl Tree {
         // Phase 2 fold records *as they arrive*, which is what makes live
         // progress possible — otherwise the whole walk would finish before the
         // caller heard a thing.
-        let (tx, rx) = mpsc::channel::<(PathBuf, Option<(u64, u64, u64)>)>();
+        let (tx, rx) = mpsc::channel::<(PathBuf, Option<(u64, u64, u64, u64)>)>();
         let walk_root = root.to_path_buf();
         let walker = std::thread::spawn(move || {
             WalkBuilder::new(&walk_root)
@@ -86,11 +131,14 @@ impl Tree {
                     let tx = tx.clone();
                     Box::new(move |result| {
                         if let Ok(entry) = result {
-                            // For files, capture (dev, ino, size); dirs send None.
-                            // `size` is the *allocated* size — 512-byte blocks
-                            // actually on disk (`st_blocks`), not `len()`.
+                            // For files, capture (dev, ino, apparent, allocated);
+                            // dirs send None. Apparent is `len()` (`st_size`);
+                            // allocated is the 512-byte blocks actually on disk
+                            // (`st_blocks`). Both ride along so the mode can flip
+                            // later without re-walking the filesystem.
                             let file = entry.metadata().ok().and_then(|m| {
-                                m.is_file().then(|| (m.dev(), m.ino(), m.blocks() * 512))
+                                m.is_file()
+                                    .then(|| (m.dev(), m.ino(), m.len(), m.blocks() * 512))
                             });
                             let _ = tx.send((entry.path().to_path_buf(), file));
                         }
@@ -106,11 +154,15 @@ impl Tree {
         for (path, file) in rx {
             let idx = tree.intern(&path);
             progress.entries += 1;
-            if let Some((dev, ino, len)) = file
+            if let Some((dev, ino, apparent, allocated)) = file
                 && seen.insert((dev, ino))
             {
-                tree.nodes[idx].own_size = len;
-                progress.bytes += len;
+                tree.nodes[idx].own_apparent = apparent;
+                tree.nodes[idx].own_allocated = allocated;
+                progress.bytes += match mode {
+                    SizeMode::Apparent => apparent,
+                    SizeMode::Allocated => allocated,
+                };
             }
             on_progress(progress);
         }
@@ -148,7 +200,8 @@ impl Tree {
         let idx = self.nodes.len();
         self.nodes.push(Node {
             name,
-            own_size: 0,
+            own_apparent: 0,
+            own_allocated: 0,
             total_size: 0,
             children: Vec::new(),
             parent,
@@ -167,7 +220,7 @@ impl Tree {
     /// NOTE: recursive, so depth is bounded by filesystem depth. Fine for now;
     /// swap for an explicit stack if it ever overflows on pathological trees.
     fn compute_totals(&mut self, idx: usize) -> u64 {
-        let mut total = self.nodes[idx].own_size;
+        let mut total = self.nodes[idx].own_size(self.mode);
         let child_count = self.nodes[idx].children.len();
         for k in 0..child_count {
             let child = self.nodes[idx].children[k];
@@ -175,6 +228,19 @@ impl Tree {
         }
         self.nodes[idx].total_size = total;
         total
+    }
+
+    /// The size mode the totals currently reflect.
+    pub fn mode(&self) -> SizeMode {
+        self.mode
+    }
+
+    /// Flip between apparent and allocated size and recompute every
+    /// `total_size` from the already-captured per-node sizes. Purely
+    /// in-memory — no filesystem access — so it's effectively instant.
+    pub fn toggle_mode(&mut self) {
+        self.mode = self.mode.toggled();
+        self.compute_totals(self.root_idx);
     }
 
     /// A node's children, largest total first — the order the TUI lists them.
