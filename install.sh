@@ -17,29 +17,33 @@ fi
 
 echo "Latest version found: $VERSION"
 
-# 2. Detect Architecture
+# 2. Detect OS and Architecture
 ARCH=$(uname -m)
 OS=$(uname -s)
 
-if [ "$OS" != "Darwin" ]; then
-    echo "This installer script only supports macOS."
-    exit 1
-fi
+case "$ARCH" in
+    arm64 | aarch64) ARCH="aarch64" ;;
+    x86_64 | amd64) ARCH="x86_64" ;;
+    *)
+        echo "Unsupported architecture: $ARCH"
+        exit 1
+        ;;
+esac
 
-if [ "$ARCH" = "arm64" ]; then
-    TARGET="fsz-aarch64-apple-darwin"
-elif [ "$ARCH" = "x86_64" ]; then
-    TARGET="fsz-x86_64-apple-darwin"
-else
-    echo "Unsupported architecture: $ARCH"
-    exit 1
-fi
+case "$OS" in
+    Darwin) TARGET="fsz-${ARCH}-apple-darwin" ;;
+    Linux) TARGET="fsz-${ARCH}-unknown-linux-gnu" ;;
+    *)
+        echo "Unsupported operating system: $OS"
+        exit 1
+        ;;
+esac
 
 URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARGET}"
 TMP_DIR=$(mktemp -d)
 TMP_BIN="${TMP_DIR}/${BINARY_NAME}"
 
-echo "Downloading ${BINARY_NAME} ${VERSION} for ${ARCH}..."
+echo "Downloading ${BINARY_NAME} ${VERSION} for ${OS} ${ARCH}..."
 if ! curl -fsSL "$URL" -o "$TMP_BIN"; then
     echo "Error: Failed to download binary from $URL"
     exit 1
@@ -49,8 +53,10 @@ fi
 chmod +x "$TMP_BIN"
 
 # 4. Strip macOS Gatekeeper Quarantine flag
-echo "Bypassing macOS Gatekeeper quarantine..."
-xattr -d com.apple.quarantine "$TMP_BIN" 2>/dev/null || true
+if [ "$OS" = "Darwin" ]; then
+    echo "Bypassing macOS Gatekeeper quarantine..."
+    xattr -d com.apple.quarantine "$TMP_BIN" 2>/dev/null || true
+fi
 
 # 5. Move to installation directory
 echo "Installing to ${INSTALL_DIR}/${BINARY_NAME}..."

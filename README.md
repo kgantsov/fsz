@@ -29,11 +29,11 @@ disk — biggest folders first, every step of the way.
 
 ## Installation
 
-### Install script (macOS)
+### Install script (macOS & Linux)
 
-The quickest way to get `fsz` is the install script, which downloads the latest
-prebuilt binary for your architecture (Apple Silicon or Intel) and installs it to
-`/usr/local/bin`:
+The quickest way to get `fsz` is the install script, which detects your OS
+(macOS or Linux) and architecture (Apple Silicon / ARM64 or Intel / x86_64),
+downloads the latest prebuilt binary, and installs it to `/usr/local/bin`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kgantsov/fsz/main/install.sh | bash
