@@ -90,7 +90,7 @@ ignored and hidden files included — so the totals reflect real disk usage.
 | `↓` / `j`               | Move selection down                     |
 | `→` / `l` / `Enter`     | Enter the selected directory            |
 | `←` / `h` / `Backspace` | Go back to the parent directory         |
-| `PgUp` / `PgDn`         | Move selection up / down by a page       |
+| `PgUp` / `PgDn`         | Move selection up / down by a page      |
 | `Home` / `End`          | Jump to the first / last entry          |
 | `Ctrl` + `D`            | Delete the selected entry (asks first)  |
 | `q` / `Esc`             | Quit (asks for confirmation)            |

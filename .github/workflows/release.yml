@@ -21,9 +21,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
           - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
           - os: macos-latest
             target: aarch64-apple-darwin
           - os: macos-latest
@@ -38,13 +38,13 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross (Linux cross-compiling)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      - name: Install cross (Linux builds)
+        if: contains(matrix.target, 'linux')
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build
         run: |
-          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+          if [[ "${{ matrix.target }}" == *linux* ]]; then
             cross build --release --target ${{ matrix.target }}
           else
             cargo build --release --target ${{ matrix.target }}
