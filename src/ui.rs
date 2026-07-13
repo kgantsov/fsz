@@ -21,6 +21,10 @@ pub struct App<'a> {
     /// `current`'s children, largest first — cached so we sort once per move.
     children: Vec<usize>,
     state: ListState,
+    /// Number of visible rows in the list body, cached each `draw` so that
+    /// PageUp/PageDown can jump by a full screenful. Starts at 1 until the
+    /// first frame measures the real viewport.
+    page: u16,
     /// When true, a "really quit?" popup is up and captures all input — so an
     /// accidental `q`/`Esc` can't drop you out of the app without a second,
     /// deliberate confirmation.
@@ -41,6 +45,7 @@ impl<'a> App<'a> {
             current: root,
             children: Vec::new(),
             state: ListState::default(),
+            page: 1,
             confirm_quit: false,
             confirm_delete: false,
             error: None,
@@ -165,6 +170,8 @@ impl<'a> App<'a> {
             KeyCode::Up | KeyCode::Char('k') => self.state.select_previous(),
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => self.enter(),
             KeyCode::Left | KeyCode::Char('h') | KeyCode::Backspace => self.go_up(),
+            KeyCode::PageDown => self.state.scroll_down_by(self.page),
+            KeyCode::PageUp => self.state.scroll_up_by(self.page),
             KeyCode::Home => self.state.select_first(),
             KeyCode::End => self.state.select_last(),
             KeyCode::Char('a') => self.toggle_size_mode(),
@@ -179,6 +186,10 @@ impl<'a> App<'a> {
             Constraint::Length(1),
         ])
         .areas(frame.area());
+
+        // Remember how many rows the list can show (body height minus its top
+        // and bottom borders) so PageUp/PageDown jump by a full screenful.
+        self.page = body.height.saturating_sub(2).max(1);
 
         // Header: the path being viewed and its aggregate size.
         let node = &self.tree.nodes[self.current];
@@ -236,7 +247,7 @@ impl<'a> App<'a> {
             let hint = if self.children.is_empty() {
                 " (empty)   ↑/↓ move · → enter · ← back · a size · q quit "
             } else {
-                " ↑/↓ move · →/⏎ enter · ←/⌫ back · a size · ^D delete · q quit "
+                " ↑/↓ move · PgUp/PgDn page · →/⏎ enter · ←/⌫ back · a size · ^D delete · q quit "
             };
             Paragraph::new(hint).style(Style::default().fg(Color::DarkGray))
         };
